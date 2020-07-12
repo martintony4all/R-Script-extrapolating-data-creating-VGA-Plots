@@ -1,0 +1,705 @@
+---
+title: "CVGA"
+author: "Jeff Plambeck"
+date: "1/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+
+#setting directory
+setwd("C:/Users/mnwadiugwu/Box/Martin/CVGA-2")
+
+#loading bins from TWPH
+load("Filtered_A1C_TIme_3Point_V4_Step4.bin")
+
+#filter rows with at least 5 A1C's
+filter <- df$Seq_Count >= 5
+All.CVGA <- df[filter,]
+
+
+#initialize vectors to zero
+vMin <-c() # vector of minimums
+vMax <- c() # vector of maximums
+vUPI <- c() # vector of UPI's associated with the min and max
+vA1Ctrend <- c()
+vCV <- c()
+vMean <- c()
+vSD <- c()
+#Cycle through All.CVGA and extract information needed:
+for(n in 1:nrow(All.CVGA)){
+  vA1c <-unlist(All.CVGA$A1c[n][[1]])
+  vA1c <- as.double(vA1c)
+  #Find the minimum from the last 5 A1C's
+  Min <- min(vA1c[(length(vA1c)-4):length(vA1c)]) #Extract individual Min
+  vMin <- c(vMin, paste(Min, sep= ","))           #Add individual min to vector
+  
+ 
+  
+  #Find the Maximum from the last 5 A1C's
+  Max <- max(vA1c[(length(vA1c)-4):length(vA1c)])
+  mean <- mean(vA1c[(length(vA1c)-4):length(vA1c)])
+  std_dev <- sd(vA1c[(length(vA1c)-4):length(vA1c)])
+  cv <- (std_dev/mean) * 100
+  #last5 <-   vA1c[(length(vA1c)-4):length(vA1c)]
+
+  vMax <- c(vMax, paste(Max, sep= ","))
+  #where are the maixmum and  minimum
+  min.pos <- which.min(vA1c[(length(vA1c)-4):length(vA1c)])
+  max.pos <- which.max(vA1c[(length(vA1c)-4):length(vA1c)])
+  if(max.pos > min.pos) {
+    aicTrend = "Increased"
+  }else {
+    aicTrend = "Decreased"
+  }
+  #Extract the UPI associated with max and min
+  UPI <- All.CVGA$UID[n]
+  vUPI <- c(vUPI, paste(UPI, sep= ","))
+  vA1Ctrend <- c(vA1Ctrend, aicTrend)
+  vMean <- c(vMean,mean)
+  vCV <- c(vCV, cv)
+  vSD <- c(vSD, std_dev)
+}
+
+#column bind the three created vectors into a dataframe
+vMin <- as.numeric(vMin)
+vMax <- as.numeric(vMax)
+
+All.CVGA.Filtered <- data.frame(vUPI, vMin, vMax, vA1Ctrend, vMean, vSD, vCV,stringsAsFactors = F)
+colnames(All.CVGA.Filtered) <- c("UPI", "Min", "Max","aicTrend", "mean","sd","cv")
+Amplitude <- All.CVGA.Filtered$Max - All.CVGA.Filtered$Min
+All.CVGA.Filtered <- cbind(All.CVGA.Filtered,Amplitude)
+typeof(All.CVGA.Filtered)
+
+
+All.Amplitude <- data.frame(Amplitude)
+
+All.CVGA.Filtered$Min <- unlist(as.numeric(All.CVGA.Filtered$Min))
+All.CVGA.Filtered$Max <- unlist(as.numeric(All.CVGA.Filtered$Max))
+
+#reading daignosis data
+
+Diagnosis <- read.table(file="Diagnosis_ICD10.csv",sep=",",header=T,stringsAsFactors = F)
+Diagnosis.combined <- aggregate(Diagnosis$three_digit, by=list(Diagnosis$UPI), paste)
+index <- match(All.CVGA.Filtered$UPI,Diagnosis.combined$Group.1)
+dc <- Diagnosis.combined[index,2]
+diagnosis <- unlist(lapply(dc,function(x) {paste(x,collapse=",")}))
+diagnosis <- gsub(",NA","",gsub("NA,","",diagnosis))
+diagnosis.count <- unlist(lapply(dc,function(x) {length(unique(x))}))
+All.CVGA.Filtered.diagnosis <- cbind(All.CVGA.Filtered, diagnosis, diagnosis.count)
+
+#reading drug class data
+MedCode <- read.csv(file="UniqueDrugClass.csv",sep=",",header=T,stringsAsFactors = F)
+MedCode1 <- aggregate(MedCode$X4.digit, by=list(MedCode$`ï..UPI`), paste)
+
+index <- match(All.CVGA.Filtered$UPI, MedCode$`ï..UPI`)
+mc <- MedCode1[index,2]
+
+medcode <- unlist(lapply(mc,function(x) {paste(x,collapse=",")}))
+medcode <- gsub(",NA","",gsub("NA,","",medcode))
+medcode.count <- unlist(lapply(mc,function(x) {length(unique(x))}))
+
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis, medcode, medcode.count)
+
+
+upc.diagnosis <- All.CVGA.Filtered.diagnosis.medcode[,c("UPI","diagnosis")]
+diagnosis.uniq <- lapply(strsplit(as.character(upc.diagnosis$diagnosis),split=","),unique)
+long.table <- NULL
+for (i in 1:length(diagnosis.uniq)) {
+  d <- diagnosis.uniq[[i]]
+  if(length(d) > 0) {
+    long.table <- rbind(long.table,cbind(upc.diagnosis$UPI[i],d))
+  }
+}
+colnames(long.table) <- c("UPI","diagnosis_code")
+length(unique(long.table[,1]))
+
+
+
+library(reshape2)
+wide.table <- dcast(data.frame(long.table),UPI ~diagnosis_code)
+rownames(wide.table) <- wide.table[,1]
+wide.table <- wide.table[,-1]
+wide.table[!is.na(wide.table)] <- 1
+
+wide.table[is.na(wide.table)] <- 0
+
+  
+write.csv(wide.table,"upi_diagnosis_wide.table.csv")
+
+smaller.wide <- data.frame(wide.table[match(as.character(All.CVGA.Filtered.diagnosis.medcode$UPI),rownames(wide.table)),])
+smaller.wide <- smaller.wide[-grep("NA",rownames(smaller.wide)),]
+                        
+cov <- All.CVGA.Filtered.diagnosis.medcode[match(rownames(smaller.wide),All.CVGA.Filtered.diagnosis.medcode[,1]), c(7)]
+print(summary(cov))
+smaller.wide <- cbind(smaller.wide, cov)
+smaller.wide2 <- smaller.wide[,-1]
+
+write.csv(smaller.wide,"DiagnosisAndCV.csv")
+write.csv(smaller.wide2,"DiagnosisAndCV2.csv")
+
+
+
+
+##Finding intersection between list of medcodes with the existing one
+
+my.list <- c("N95", "R10", "R09", "F41", "M54", "R21", "B37", "E88", "R51", "H66", "J01", "F32", "R11", "D48", "R05", "J06", "J30", "M25", "R79", "J32", "R07", "Z09", "N39", "K21", "R19", "R20")
+
+diagnosis.list <- strsplit(as.character(All.CVGA.Filtered.diagnosis.medcode$diagnosis),split = ",")
+
+my.intersect.diagnosis.list <- lapply(diagnosis.list, function(x) {intersect(my.list,x)} )
+intersect.count <- unlist(lapply(my.intersect.diagnosis.list,length))
+my.intersect.diagnosis.string <- unlist(lapply(my.intersect.diagnosis.list,function(x) {paste(x,collapse=",")}))
+  
+
+
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode,intersect.count)
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode, my.intersect.diagnosis.string)
+
+
+my.list2 <- c("I73", "R26", "R60", "M20", "B35", "I83", "I48", "D64", "I25", "I50", "Z91")
+
+diagnosis.list1 <- strsplit(as.character(All.CVGA.Filtered.diagnosis.medcode$diagnosis),split = ",")
+
+my.intersect.diagnosis.list1 <- lapply(diagnosis.list1, function(x) {intersect(my.list2,x)} )
+intersect.count1 <- unlist(lapply(my.intersect.diagnosis.list1,length))
+my.intersect.diagnosis.string1 <- unlist(lapply(my.intersect.diagnosis.list1,function(x) {paste(x,collapse=",")}))
+  
+
+
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode,intersect.count1)
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode, my.intersect.diagnosis.string1)
+
+my.list3 <- c("Z02", "I12", "I11", "T41", "E28", "Z11")
+
+diagnosis.list2 <- strsplit(as.character(All.CVGA.Filtered.diagnosis.medcode$diagnosis),split = ",")
+
+my.intersect.diagnosis.list2 <- lapply(diagnosis.list2, function(x) {intersect(my.list3,x)} )
+intersect.count2 <- unlist(lapply(my.intersect.diagnosis.list2,length))
+my.intersect.diagnosis.string2 <- unlist(lapply(my.intersect.diagnosis.list2,function(x) {paste(x,collapse=",")}))
+  
+
+
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode,intersect.count2)
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode, my.intersect.diagnosis.string2)
+
+
+my.list4 <- c("I10", "E65", "E67", "E68", "E78", "I12", "I13", "N18", "I25")
+
+diagnosis.list3 <- strsplit(as.character(All.CVGA.Filtered.diagnosis.medcode$diagnosis),split = ",")
+
+my.intersect.diagnosis.list3 <- lapply(diagnosis.list3, function(x) {intersect(my.list4,x)} )
+intersect.count3 <- unlist(lapply(my.intersect.diagnosis.list3,length))
+my.intersect.diagnosis.string3 <- unlist(lapply(my.intersect.diagnosis.list3,function(x) {paste(x,collapse=",")}))
+  
+
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode,intersect.count3)
+All.CVGA.Filtered.diagnosis.medcode <- cbind(All.CVGA.Filtered.diagnosis.medcode, my.intersect.diagnosis.string3)
+
+#Filtering data based on %CV range
+
+Filter2 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$Max<= 7,]
+Best2<-Filter2
+
+
+Filter3 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$Max >= 7,]
+Worst<-Filter3
+
+cv2 <- Worst[Worst$cv>= 20,]
+Worstcv2 <- cv2
+
+cv3 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$cv<= 10,]
+AllCV1 <- cv3
+
+cv4 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$cv > 10 & All.CVGA.Filtered.diagnosis.medcode$cv <=20,]
+AllCV2 <- cv4
+
+cv5 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$cv > 20 & All.CVGA.Filtered.diagnosis.medcode$cv <=30,]
+AllCV3 <- cv5
+
+cv6 <- All.CVGA.Filtered.diagnosis.medcode[All.CVGA.Filtered.diagnosis.medcode$cv > 30,]
+AllCV4 <- cv6
+
+
+#creating diagnosis dataframe
+colnames(All.CVGA.Filtered)[9]<- "diagnosis"
+
+#writing data to file based on %CV range
+
+write.csv(Worst, file="Worst.csv",quote=FALSE,row.names = FALSE)
+
+write.csv(Best2, file="Best2.csv",quote=FALSE,row.names = FALSE)
+write.csv(All.CVGA.Filtered, file="All.CVGA.Filtered.csv",quote=FALSE,row.names = FALSE)
+write.csv(Worstcv2, file="Worstcv2",quote=FALSE,row.names = FALSE)
+write.csv(All.CVGA.Filtered.diagnosis, file="All.CVGA.Filtered.diagnosis",quote=FALSE,row.names = FALSE)
+
+
+```
+
+### Review the data: Minimum
+
+```{r, echo = TRUE}
+summary(All.CVGA.Filtered$Min)
+ggplot() + geom_histogram(data=All.CVGA.Filtered, aes(x=Min))
+
+```
+
+```{r, echo = TRUE}
+summary(All.CVGA.Filtered$Max)
+ggplot() + geom_histogram(data=All.CVGA.Filtered, aes(x=Max))
+
+```
+## Plot VGA Graph: starting with the background and moving to the foreground
+
+### Background squares using geom_rect, Unknown boundaries but here is how you would define them
+Check fill is in correct position before moving on
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=1, x2=2, y1=4, y2=5, t='yellow', r="a") #bottom right
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(4,1),breaks = seq(from=4, to=1, by=-1), name="Min") + 
+  scale_y_continuous(limits =c(4,7), breaks = seq(from=4, to=7, by=1), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=-Inf, xmax=x2, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") 
+
+print(plot1)
+```
+
+Fill in the rest of the row
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=1, x2=2, y1=4, y2=5, t='yellow', r="a") #bottom right
+b=data.frame(x1=2, x2=3, y1=4, y2=5, t='b', r="b") #bottom middle
+c=data.frame(x1=3, x2=4, y1=4, y2=5, t='c', r="c") #bottom left
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(4,1),breaks = seq(from=4, to=1, by=-1), name="Min") + 
+  scale_y_continuous(limits =c(4,7), breaks = seq(from=4, to=7, by=1), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=-Inf, xmax=x2, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") +
+  geom_rect(data=b, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 4.5, label = "b"), size =3, color = "Black") +
+  geom_rect(data=c, 
+            mapping=aes(xmin=x1, xmax=Inf, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'dark green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 4.5, label = "c"), size =3, color = "Black") 
+
+print(plot1)
+```
+
+Build the rest of the background
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=1, x2=2, y1=4, y2=5, t='yellow', r="a") #bottom right
+b=data.frame(x1=2, x2=3, y1=4, y2=5, t='b', r="b") #bottom middle
+c=data.frame(x1=3, x2=4, y1=4, y2=5, t='c', r="c") #bottom left
+#Second Level
+d=data.frame(x1=1, x2=2, y1=5, y2=6, t='d', r="d") #middle right
+e=data.frame(x1=2, x2=3, y1=5, y2=6, t='e', r="e") #middle middle
+f=data.frame(x1=3, x2=4, y1=5, y2=6, t='f', r="f") #middle left
+#Third Level
+g=data.frame(x1=1, x2=2, y1=6, y2=7, t='g', r="g") #middle right
+h=data.frame(x1=2, x2=3, y1=6, y2=7, t='h', r="h") #middle middle
+i=data.frame(x1=3, x2=4, y1=6, y2=7, t='i', r="i") #middle left
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(4,1),breaks = seq(from=4, to=1, by=-1), name="Min") + 
+  scale_y_continuous(limits =c(4,7), breaks = seq(from=4, to=7, by=1), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=-Inf, xmax=x2, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") +
+   geom_rect(data=b, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 4.5, label = "b"), size =3, color = "Black") +
+  geom_rect(data=c, 
+            mapping=aes(xmin=x1, xmax=Inf, ymin=-Inf, ymax=y2), 
+            color="black",
+            fill = 'dark green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 4.5, label = "c"), size =3, color = "Black")+ 
+  geom_rect(data=d, 
+            mapping=aes(xmin=-Inf, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 5.5, label = "d"), size =3, color = "Black") +
+  geom_rect(data=e, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 5.5, label = "e"), size =3, color = "Black") +
+  geom_rect(data=f, 
+            mapping=aes(xmin=x1, xmax=Inf, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 5.5, label = "f"), size =3, color = "Black")+
+  geom_rect(data=g, 
+            mapping=aes(xmin=-Inf, xmax=x2, ymin=y1, ymax=Inf), 
+            color="black",
+            fill = 'red',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 6.5, label = "g"), size =3, color = "Black") +
+  geom_rect(data=h, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=Inf), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 6.5, label = "h"), size =3, color = "Black") +
+  
+  geom_rect(data=i, 
+            mapping=aes(xmin=x1, xmax=Inf, ymin=y1, ymax=Inf), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 6.5, label = "i"), size =3, color = "Black") 
+
+print(plot1)
+```
+
+
+If you want boundaries square instead
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=1, x2=2, y1=4, y2=5, t='yellow', r="a") #bottom right
+b=data.frame(x1=2, x2=3, y1=4, y2=5, t='b', r="b") #bottom middle
+c=data.frame(x1=3, x2=4, y1=4, y2=5, t='c', r="c") #bottom left
+#Second Level
+d=data.frame(x1=1, x2=2, y1=5, y2=6, t='d', r="d") #middle right
+e=data.frame(x1=2, x2=3, y1=5, y2=6, t='e', r="e") #middle middle
+f=data.frame(x1=3, x2=4, y1=5, y2=6, t='f', r="f") #middle left
+#Third Level
+g=data.frame(x1=1, x2=2, y1=6, y2=7, t='g', r="g") #middle right
+h=data.frame(x1=2, x2=3, y1=6, y2=7, t='h', r="h") #middle middle
+i=data.frame(x1=3, x2=4, y1=6, y2=7, t='i', r="i") #middle left
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(4,1),breaks = seq(from=4, to=1, by=-1), name="Min") + 
+  scale_y_continuous(limits =c(4,7), breaks = seq(from=4, to=7, by=1), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") +
+   geom_rect(data=b, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 4.5, label = "b"), size =3, color = "Black") +
+  geom_rect(data=c, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'dark green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 4.5, label = "c"), size =3, color = "Black")+ 
+  geom_rect(data=d, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 5.5, label = "d"), size =3, color = "Black") +
+  geom_rect(data=e, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 5.5, label = "e"), size =3, color = "Black") +
+  geom_rect(data=f, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 5.5, label = "f"), size =3, color = "Black")+
+  geom_rect(data=g, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'red',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 1.5, y = 6.5, label = "g"), size =3, color = "Black") +
+  geom_rect(data=h, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 2.5, y = 6.5, label = "h"), size =3, color = "Black") +
+  
+  geom_rect(data=i, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  geom_text(aes(x = 3.5, y = 6.5, label = "i"), size =3, color = "Black") 
+
+print(plot1)
+```
+
+
+Change boundaries and axes to fit data
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=4, x2=5, y1=7, y2=9, t='a', r="a") #bottom right
+b=data.frame(x1=5, x2=6, y1=7, y2=9, t='b', r="b") #bottom middle
+c=data.frame(x1=6, x2=7, y1=7, y2=9, t='c', r="c") #bottom left
+#Second Level
+d=data.frame(x1=4, x2=5, y1=9, y2=11, t='d', r="d") #middle right
+e=data.frame(x1=5, x2=6, y1=9, y2=11, t='e', r="e") #middle middle
+f=data.frame(x1=6, x2=7, y1=9, y2=11, t='f', r="f") #middle left
+#Third Level
+g=data.frame(x1=4, x2=5, y1=11, y2=14, t='g', r="g") #middle right
+h=data.frame(x1=5, x2=6, y1=11, y2=14, t='h', r="h") #middle middle
+i=data.frame(x1=6, x2=7, y1=11, y2=14, t='i', r="i") #middle left
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(7,4),breaks = seq(from=7, to=4, by=-1), name="Min") + 
+  scale_y_continuous(limits =c(7,14), breaks = seq(from=7, to=14, by=2), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") +
+   geom_rect(data=b, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 4.5, label = "b"), size =3, color = "Black") +
+  geom_rect(data=c, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'dark green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 3.5, y = 4.5, label = "c"), size =3, color = "Black")+ 
+  geom_rect(data=d, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 5.5, label = "d"), size =3, color = "Black") +
+  geom_rect(data=e, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 5.5, label = "e"), size =3, color = "Black") +
+  geom_rect(data=f, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 3.5, y = 5.5, label = "f"), size =3, color = "Black")+
+  geom_rect(data=g, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'red',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 6.5, label = "g"), size =3, color = "Black") +
+  geom_rect(data=h, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 6.5, label = "h"), size =3, color = "Black") +
+  
+  geom_rect(data=i, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE)
+  #geom_text(aes(x = 3.5, y = 6.5, label = "i"), size =3, color = "Black") 
+
+print(plot1)
+```
+
+
+Add Data over top
+
+```{r, echo=TRUE}
+#Set Boundary definitions 1 for each square (9)
+#First Level
+a=data.frame(x1=4.0, x2=7.89, y1=4.0, y2=7.89, t='a', r="a") #bottom right
+b=data.frame(x1=7.89, x2=12.08, y1=4.0, y2=7.89, t='b', r="b") #bottom middle
+c=data.frame(x1=12.08, x2=15.0, y1=4.0, y2=7.89, t='c', r="c") #bottom left
+#Second Level
+d=data.frame(x1=4.0, x2=7.89, y1=7.89, y2=12.08, t='d', r="d") #middle right
+e=data.frame(x1=7.89, x2=12.08, y1=7.89, y2=12.08, t='e', r="e") #middle middle
+f=data.frame(x1=12.08, x2=15.0, y1=7.89, y2=12.08, t='f', r="f") #middle left
+#Third Level
+g=data.frame(x1=4.0, x2=7.89, y1=12.08, y2=15.0, t='g', r="g") #middle right
+h=data.frame(x1=7.89, x2=12.08, y1=12.08, y2=15.0, t='h', r="h") #middle middle
+i=data.frame(x1=12.08, x2=15.0, y1=12.08, y2=15.0, t='i', r="i") #middle left
+
+plot1 <- ggplot() +
+  scale_x_reverse(limits =c(15,3),breaks = seq(from=15, to=4, by=-5), name="Min") + 
+  scale_y_continuous(limits =c(4,15), breaks = seq(from=4, to=15, by=5), name="Max") +
+  geom_rect(show.legend = FALSE)
+
+#Set up background rectangle sizes,remove legend, add text to indicate what the colors mean
+plot1 <- plot1 + 
+  geom_rect(data=a, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 4.5, label = "a"), size =3, color = "Black") +
+   geom_rect(data=b, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 4.5, label = "b"), size =3, color = "Black") +
+  geom_rect(data=c, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'dark green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 3.5, y = 4.5, label = "c"), size =3, color = "Black")+ 
+  geom_rect(data=d, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 5.5, label = "d"), size =3, color = "Black") +
+  geom_rect(data=e, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 5.5, label = "e"), size =3, color = "Black") +
+  geom_rect(data=f, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'light green',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 3.5, y = 5.5, label = "f"), size =3, color = "Black")+
+  geom_rect(data=g, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'red',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 1.5, y = 6.5, label = "g"), size =3, color = "Black") +
+  geom_rect(data=h, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'orange',
+            alpha=0.25,
+            show.legend = FALSE) + 
+  #geom_text(aes(x = 2.5, y = 6.5, label = "h"), size =3, color = "Black") +
+  
+  geom_rect(data=i, 
+            mapping=aes(xmin=x1, xmax=x2, ymin=y1, ymax=y2), 
+            color="black",
+            fill = 'yellow',
+            alpha=0.25,
+            show.legend = FALSE) +
+  #geom_text(aes(x = 3.5, y = 6.5, label = "i"), size =3, color = "Black") 
+  
+  geom_point(data=All.CVGA.Filtered, aes(x=Min, y=Max, shape=vA1Ctrend, color =vA1Ctrend, fill="blue", alpha=0)) 
+
+print(plot1)
+```
+
+You can see a lot of data gets kicked out with this configuration. Im going to let you play with the boundaries and the shape sizes but I am not sure how to overcome the high amount of missing data.
+
+```{r, echo=TRUE}
+
+plot2 <-  ggplot() + geom_point(data=All.CVGA.Filtered, aes(x=Min, y=Max))
+
+print(plot2)
+```
+
